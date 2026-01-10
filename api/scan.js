@@ -2,105 +2,88 @@ const fetch = require('node-fetch');
 const cheerio = require('cheerio');
 
 module.exports = async (req, res) => {
-    // 1. CORS - რომ ყველა ბრაუზერიდან იმუშაოს (ინკოგნიტოშიც)
     res.setHeader('Access-Control-Allow-Credentials', true);
     res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,PATCH,DELETE,POST,PUT');
-    res.setHeader('Access-Control-Allow-Headers', 'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version');
+    res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
-    // თუ უბრალოდ ხელის შევლებაა (OPTIONS request), ვპასუხობთ OK
-    if (req.method === 'OPTIONS') {
-        res.status(200).end();
-        return;
-    }
+    if (req.method === 'OPTIONS') return res.status(200).end();
 
     const { url } = req.query;
+    if (!url) return res.status(400).json({ error: 'URL missing' });
 
-    if (!url) {
-        return res.status(400).json({ error: 'გთხოვთ მიუთითოთ URL (?url=...)' });
-    }
-
-    // დომენის გასუფთავება და https-ის მიბმა
     let cleanUrl = url.replace(/^https?:\/\//, '').replace(/\/$/, '');
     const targetUrl = `https://${cleanUrl}`;
 
     try {
-        console.log(`Scanning: ${targetUrl}`);
-
-        // 2. საიტის წაკითხვა (8 წამიანი ლიმიტით)
         const response = await fetch(targetUrl, {
-            headers: { 
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36' 
-            },
-            timeout: 8000 
+            headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36' },
+            timeout: 8000
         });
 
         const html = await response.text();
         const $ = cheerio.load(html);
+        const fullText = ($.html() + $('script').text()).toLowerCase();
 
-        // ტექსტის გაერთიანება ანალიზისთვის (პატარა ასოებით)
-        const scripts = $('script').map((i, el) => $(el).attr('src') || $(el).html()).get().join(' ');
-        const metaTags = $('meta').map((i, el) => $(el).attr('content') || '').get().join(' ');
-        const title = $('title').text();
-        const fullText = (scripts + metaTags + title).toLowerCase();
-
-        // 3. ტექნოლოგიების ძებნა
+        // --- 1. TECH STACK (Operations) ---
         const techStack = {
             pms: "Not Detected",
-            cms: "Custom / Unknown",
+            bookingEngine: "Not Detected",
             analytics: "Not Detected",
-            bookingEngine: "Not Detected"
+            cms: "Custom / Unknown"
         };
 
         // CMS
-        if (fullText.includes('wp-content') || fullText.includes('wordpress')) techStack.cms = "WordPress";
-        else if (fullText.includes('wix.com') || fullText.includes('wix-')) techStack.cms = "Wix";
+        if (fullText.includes('wp-content')) techStack.cms = "WordPress";
+        else if (fullText.includes('wix.com')) techStack.cms = "Wix";
         else if (fullText.includes('squarespace')) techStack.cms = "Squarespace";
 
         // Analytics
-        if (fullText.includes('gtag') || fullText.includes('google-analytics') || fullText.includes('ua-')) techStack.analytics = "Google Analytics";
-        else if (fullText.includes('fbq(') || fullText.includes('fbevents.js')) techStack.analytics = "Facebook Pixel";
+        if (fullText.includes('gtag') || fullText.includes('ua-')) techStack.analytics = "Google Analytics";
+        else if (fullText.includes('fbq(')) techStack.analytics = "Facebook Pixel";
 
-        // Booking Engine (სასტუმროსთვის)
+        // Booking Engines & Channel Managers
         if (fullText.includes('siteminder')) techStack.bookingEngine = "SiteMinder";
-        else if (fullText.includes('mews')) techStack.bookingEngine = "Mews";
-        else if (fullText.includes('cloudbeds')) techStack.bookingEngine = "Cloudbeds";
+        else if (fullText.includes('cloudbeds')) { techStack.bookingEngine = "Cloudbeds"; techStack.pms = "Cloudbeds"; }
+        else if (fullText.includes('mews')) { techStack.bookingEngine = "Mews"; techStack.pms = "Mews"; }
         else if (fullText.includes('simplebooking')) techStack.bookingEngine = "SimpleBooking";
-        else if (fullText.includes('booking.com')) techStack.bookingEngine = "Booking.com Widget";
+        else if (fullText.includes('hotelrunner')) techStack.bookingEngine = "HotelRunner";
+        else if (fullText.includes('booking.com')) techStack.bookingEngine = "Booking.com Widget (Basic)";
 
-        // 4. ბიზნესის ტიპის გამოცნობა
-        let detectedType = "other";
-        const bodyText = $('body').text().toLowerCase().slice(0, 5000);
-        
-        if (bodyText.includes('hotel') || bodyText.includes('room') || bodyText.includes('stay') || bodyText.includes('სასტუმრო')) detectedType = "hotel";
-        else if (bodyText.includes('wine') || bodyText.includes('vineyard') || bodyText.includes('tasting') || bodyText.includes('მარანი')) detectedType = "winery";
-        else if (bodyText.includes('menu') || bodyText.includes('restaurant') || bodyText.includes('food') || bodyText.includes('რესტორანი')) detectedType = "restaurant";
+        // --- 2. SEO & VISIBILITY (New!) ---
+        const seo = {
+            title: $('title').text().trim() || "Missing",
+            description: $('meta[name="description"]').attr('content') || "Missing",
+            ogImage: $('meta[property="og:image"]').attr('content') || "Missing",
+            h1: $('h1').length > 0 ? "Present" : "Missing"
+        };
 
-        // 5. ქულის დათვლა
-        let score = 40;
-        if (techStack.cms !== "Custom / Unknown") score += 15;
-        if (techStack.bookingEngine !== "Not Detected") score += 25;
+        // --- 3. SCORING LOGIC ---
+        let score = 30; // Base score
+        if (techStack.pms !== "Not Detected") score += 20;
+        if (techStack.bookingEngine !== "Not Detected") score += 20;
         if (techStack.analytics !== "Not Detected") score += 10;
-        if (targetUrl.startsWith("https")) score += 10;
+        if (seo.description !== "Missing" && seo.description.length > 10) score += 10;
+        if (seo.ogImage !== "Missing") score += 5;
+        if (techStack.cms !== "Custom / Unknown") score += 5;
 
         res.status(200).json({
             success: true,
             domain: cleanUrl,
-            type: detectedType,
-            score: score,
-            stack: techStack
+            score: Math.min(score, 100),
+            stack: techStack,
+            seo: seo
         });
 
     } catch (error) {
-        console.error(error);
-        // თუ ვერ შევიდა, ვაბრუნებთ შეცდომას, მაგრამ ლამაზად
         res.status(200).json({
             success: false,
             domain: cleanUrl,
-            error: "საიტი ვერ გაიხსნა ან დაბლოკილია.",
-            type: "unknown",
-            score: 20,
-            stack: { pms: "Unknown", cms: "Unknown" }
+            error: "Scan failed",
+            score: 25,
+            stack: { pms: "Not Detected", bookingEngine: "Not Detected" },
+            seo: { title: "Error", description: "Missing" }
         });
     }
+};
 };
