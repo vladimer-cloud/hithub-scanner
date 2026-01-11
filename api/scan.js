@@ -1,7 +1,5 @@
-const cheerio = require('cheerio');
-
 module.exports = async (req, res) => {
-    // 1. HEADERS & SETUP
+    // 1. HEADERS
     res.setHeader('Access-Control-Allow-Credentials', true);
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS');
@@ -18,30 +16,39 @@ module.exports = async (req, res) => {
     const targetUrl = `https://${cleanUrl}`;
 
     try {
-        // 2. FETCHING (Native)
+        // 2. FETCH (Native Node.js)
         const response = await fetch(targetUrl, {
-            headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/100.0.0.0 Safari/537.36' }
+            headers: { 
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/100.0.0.0 Safari/537.36' 
+            }
         });
 
-        if (!response.ok) throw new Error(`Failed: ${response.status}`);
+        if (!response.ok) throw new Error(`Failed to load site: ${response.status}`);
 
         const html = await response.text();
-        const $ = cheerio.load(html);
-        
-        // ანალიზისთვის ვიღებთ მთლიან ტექსტს და სკრიპტებს
-        const fullHTML = $.html().toLowerCase();
-        const bodyText = $('body').text().toLowerCase();
+        const lowerHtml = html.toLowerCase(); // მთლიანი ტექსტი პატარა ასოებით
 
-        // --- 3. TECH STACK IDENTIFICATION (THE CORE) ---
+        // --- 3. ANALYZER (No Libraries, just Logic) ---
+        
         const techStack = {
             pms: "Not Detected",
             bookingEngine: "Not Detected",
             analytics: "Not Detected",
-            cms: "Custom / Unknown",
-            widgets: []
+            cms: "Custom / Unknown"
         };
 
-        // A. Booking Engines & PMS (The Mega List)
+        const insights = {
+            otaTrap: false,
+            schema: false,
+            sustainability: false,
+            bleisure: false,
+            trust: false,
+            communication: false
+        };
+
+        // --- DETECTION LOGIC (TEXT SEARCH) ---
+
+        // A. Booking & PMS
         const engines = [
             { id: "siteminder", name: "SiteMinder" },
             { id: "cloudbeds", name: "Cloudbeds", pms: true },
@@ -50,18 +57,16 @@ module.exports = async (req, res) => {
             { id: "hotelrunner", name: "HotelRunner" },
             { id: "travelline", name: "TravelLine" },
             { id: "wubook", name: "WuBook" },
-            { id: "booking.com", name: "Booking.com Widget" }, // ეს არ არის ძრავა, ეს ვიჯეტია
+            { id: "booking.com", name: "Booking.com Widget" },
             { id: "fina", name: "Fina (Geo)", pms: true },
             { id: "shelter", name: "Shelter", pms: true },
             { id: "guesty", name: "Guesty" },
-            { id: "sirvoy", name: "Sirvoy" },
-            { id: "littlehotelier", name: "Little Hotelier" }
+            { id: "sirvoy", name: "Sirvoy" }
         ];
 
         engines.forEach(eng => {
-            if (fullHTML.includes(eng.id)) {
+            if (lowerHtml.includes(eng.id)) {
                 if (eng.id === "booking.com") {
-                    // Booking.com ვიჯეტი არ ითვლება "საკუთარ ძრავად"
                     if(techStack.bookingEngine === "Not Detected") techStack.bookingEngine = "Booking.com Widget";
                 } else {
                     techStack.bookingEngine = eng.name;
@@ -71,106 +76,75 @@ module.exports = async (req, res) => {
         });
 
         // B. CMS
-        if (fullHTML.includes('wp-content')) techStack.cms = "WordPress";
-        else if (fullHTML.includes('wix.com')) techStack.cms = "Wix";
-        else if (fullHTML.includes('squarespace')) techStack.cms = "Squarespace";
-        else if (fullHTML.includes('shopify')) techStack.cms = "Shopify";
+        if (lowerHtml.includes('wp-content')) techStack.cms = "WordPress";
+        else if (lowerHtml.includes('wix.com')) techStack.cms = "Wix";
+        else if (lowerHtml.includes('squarespace')) techStack.cms = "Squarespace";
+        else if (lowerHtml.includes('shopify')) techStack.cms = "Shopify";
 
         // C. Analytics
-        if (fullHTML.includes('gtag') || fullHTML.includes('ua-')) techStack.analytics = "Google Analytics";
-        if (fullHTML.includes('fbq(')) techStack.analytics = (techStack.analytics === "Not Detected") ? "Facebook Pixel" : "GA + Pixel";
+        if (lowerHtml.includes('gtag') || lowerHtml.includes('ua-')) techStack.analytics = "Google Analytics";
+        if (lowerHtml.includes('fbq(')) techStack.analytics = (techStack.analytics === "Not Detected") ? "Facebook Pixel" : "GA + Pixel";
 
-        // --- 4. BUSINESS INTELLIGENCE (HIT.LOGIC) ---
+        // --- INSIGHTS ---
         
-        const insights = {
-            otaTrap: false,        // გადადის თუ არა პირდაპირ Booking-ზე
-            schema: false,         // აქვს თუ არა Google-ის სტრუქტურა
-            sustainability: false, // არის თუ არა ოპტიმიზებული (WebP, Lazy)
-            bleisure: false,       // სამუშაო გარემო
-            trust: false,          // რევიუები
-            communication: false   // ჩატი
-        };
-
-        // 4.1 OTA TRAP DETECTIVE
-        // ვეძებთ ლინკებს, რომლებიც მიდიან Booking.com-ზე
-        let otaLinks = 0;
-        $('a').each((i, link) => {
-            const href = $(link).attr('href');
-            if (href && (href.includes('booking.com') || href.includes('expedia') || href.includes('airbnb'))) {
-                otaLinks++;
-            }
-        });
-        // თუ ძრავა არ აქვს და ლინკები აქვს -> Trap არის
-        if (otaLinks > 0 && (techStack.bookingEngine === "Not Detected" || techStack.bookingEngine === "Booking.com Widget")) {
+        // OTA Trap (თუ Booking ლინკები ბევრია და ძრავა არ ჩანს)
+        const bookingLinksCount = (lowerHtml.match(/booking\.com/g) || []).length;
+        if (bookingLinksCount > 2 && (techStack.bookingEngine === "Not Detected" || techStack.bookingEngine === "Booking.com Widget")) {
             insights.otaTrap = true;
         }
 
-        // 4.2 ZERO-CLICK SEO (Schema Markup)
-        if (fullHTML.includes('application/ld+json')) {
-            insights.schema = true;
-        }
+        // Zero-Click SEO
+        if (lowerHtml.includes('application/ld+json')) insights.schema = true;
 
-        // 4.3 DIGITAL SUSTAINABILITY
-        // ვამოწმებთ სურათებს - აქვს თუ არა WebP ან Lazy Loading
-        if (fullHTML.includes('.webp') || fullHTML.includes('loading="lazy"')) {
-            insights.sustainability = true;
-        }
+        // Sustainability
+        if (lowerHtml.includes('.webp') || lowerHtml.includes('loading="lazy"')) insights.sustainability = true;
 
-        // 4.4 BLEISURE TARGETING
-        // ვეძებთ სიტყვებს: wifi, work, desk, conference
-        const bleisureKeywords = ['wifi', 'wi-fi', 'workspace', 'desk', 'conference', 'meeting', 'coworking', 'remote'];
-        if (bleisureKeywords.some(keyword => bodyText.includes(keyword))) {
-            insights.bleisure = true;
-        }
+        // Bleisure
+        if (lowerHtml.includes('wifi') || lowerHtml.includes('workspace') || lowerHtml.includes('conference')) insights.bleisure = true;
 
-        // 4.5 TRUST & COMMUNICATION
-        if (fullHTML.includes('tripadvisor') || fullHTML.includes('trustpilot')) insights.trust = true;
-        if (fullHTML.includes('whatsapp') || fullHTML.includes('tawk.to') || fullHTML.includes('intercom') || fullHTML.includes('messenger')) {
-            insights.communication = true;
-        }
+        // Communication
+        if (lowerHtml.includes('whatsapp') || lowerHtml.includes('tawk.to') || lowerHtml.includes('messenger')) insights.communication = true;
 
-        // --- 5. SCORING ALGORITHM ---
-        let score = 30; // Base score
+        // --- SEO (Simple Regex) ---
+        const titleMatch = html.match(/<title[^>]*>([^<]+)<\/title>/i);
+        const descMatch = html.match(/<meta[^>]*name=["']description["'][^>]*content=["']([^"']*)["'][^>]*>/i);
+        const ogImageMatch = html.match(/<meta[^>]*property=["']og:image["'][^>]*content=["']([^"']*)["'][^>]*>/i);
 
-        // Tech Stack Impact
-        if (techStack.bookingEngine !== "Not Detected" && techStack.bookingEngine !== "Booking.com Widget") score += 25; // ძრავა მთავარია
+        const seoData = {
+            title: titleMatch ? titleMatch[1].trim() : "Missing",
+            description: descMatch ? descMatch[1] : "Missing",
+            ogImage: ogImageMatch ? ogImageMatch[1] : "Missing"
+        };
+
+        // --- SCORING ---
+        let score = 30;
+        if (techStack.bookingEngine !== "Not Detected" && techStack.bookingEngine !== "Booking.com Widget") score += 25;
         if (techStack.pms !== "Not Detected") score += 15;
         if (techStack.analytics !== "Not Detected") score += 10;
-
-        // Insights Impact
         if (insights.schema) score += 5;
-        if (insights.sustainability) score += 5;
         if (insights.communication) score += 5;
-        if (!insights.otaTrap) score += 5; // თუ მახეში არ არიან, ქულა ემატებათ
+        if (!insights.otaTrap) score += 5;
+        if (seoData.description !== "Missing" && seoData.description.length > 20) score += 5;
 
-        // SEO Basic
-        const title = $('title').text().trim();
-        const desc = $('meta[name="description"]').attr('content');
-        const seoData = {
-            title: title.substring(0, 60) || "Missing",
-            description: desc || "Missing",
-            ogImage: $('meta[property="og:image"]').attr('content') || "Missing"
-        };
-        
+        // RESPONSE
         res.status(200).json({
             success: true,
             domain: cleanUrl,
             score: Math.min(score, 100),
             stack: techStack,
             seo: seoData,
-            insights: insights // ვაბრუნებთ ახალ ინტელექტს
+            insights: insights
         });
 
     } catch (error) {
-        console.error(error);
+        // ERROR HANDLING (არ გატყდეს საიტი)
         res.status(200).json({
             success: false,
             domain: cleanUrl,
             error: "Scan Failed",
-            score: 25,
+            score: 20,
             stack: { bookingEngine: "Not Detected" },
-            insights: { otaTrap: true } // თუ სკანირება ჩავარდა, ჩავთვალოთ რომ ცუდადაა საქმე
+            insights: { otaTrap: true }
         });
     }
-};
 };
