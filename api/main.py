@@ -27,8 +27,8 @@ app.add_middleware(
 # --- CONFIGURATION (აქ ჩაწერე შენი მონაცემები) ---
 SMTP_SERVER = "smtp.gmail.com"
 SMTP_PORT = 587
-SMTP_USER = "your_email@gmail.com" 
-SMTP_PASSWORD = "your_app_password"
+SMTP_USER = "your_email@gmail.com"  # <--- ჩაწერე შენი მეილი
+SMTP_PASSWORD = "your_app_password" # <--- ჩაწერე Google App Password
 
 # ბრაუზერის ჰედერები (რომ საიტმა არ დაგვბლოკოს)
 HEADERS = {
