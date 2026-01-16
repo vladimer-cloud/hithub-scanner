@@ -15,10 +15,10 @@ from typing import List, Optional, Dict
 # ინიციალიზაცია
 app = FastAPI(title="HIT Scout API V3 Full", version="3.3")
 
-# 🚨 CORS: ვხსნით ყველასთვის, რომ შენმა საიტმა (86test) დაინახოს
+# 🚨 CORS FIX: ეს არის მთავარი! ვხსნით ყველასთვის.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["*"],  # უშვებს მოთხოვნას ნებისმიერი საიტიდან
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -219,7 +219,7 @@ async def audit_v3_deep(
             try:
                 target_url = f"http://{clean_domain}"
                 req_start = time.time()
-                resp = await client.get(target_url, headers=HEADERS, timeout=12)
+                resp = await client.get(target_url, headers=HEADERS, timeout=10)
                 load_time = round(time.time() - req_start, 2)
                 html_content = resp.text
                 response_headers = resp.headers
